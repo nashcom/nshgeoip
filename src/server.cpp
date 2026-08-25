@@ -383,9 +383,12 @@ bool Server::ensure_socket_directory(const std::string &socket_path, std::string
         return false;
     }
 
-    // Something is already there. Don't just trust it -- in a
-    // world-writable location like /tmp, another unprivileged user could
-    // have pre-created a same-named directory before nshgeoip ever started.
+    // Something is already there. Don't just trust it's a directory nshgeoip
+    // can actually use -- confirm both. Checking write access rather than
+    // exact ownership (st_uid == getuid()) is deliberately more permissive:
+    // it accepts a directory nshgeoip doesn't own but can write into (e.g. a
+    // shared tmpfs mode=1777 mount, common in containers), not just one it
+    // created itself.
     struct stat st
     {};
     if (lstat(dir.c_str(), &st) != 0)
@@ -398,10 +401,9 @@ bool Server::ensure_socket_directory(const std::string &socket_path, std::string
         err = "socket directory path '" + dir + "' exists but is not a directory";
         return false;
     }
-    if (st.st_uid != getuid())
+    if (access(dir.c_str(), W_OK) != 0)
     {
-        err = "refusing to use socket directory '" + dir + "' owned by another user (uid " + std::to_string(st.st_uid) +
-              ")";
+        err = "socket directory '" + dir + "' exists but is not writable: " + errno_str();
         return false;
     }
     return true;

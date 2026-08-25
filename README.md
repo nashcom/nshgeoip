@@ -15,7 +15,7 @@ IP address -> nshgeoip -> local MMDB lookup -> GeoIP annotation
 - [Architecture](#architecture)
 - [Dependencies](#dependencies)
 - [Compilation](#compilation)
-  - [Static Alpine build](#static-alpine-build)
+  - [Static build (scratch image)](#static-build-scratch-image)
 - [Configuration](#configuration)
 - [Installation](#installation)
 - [Management script](#management-script)
@@ -28,6 +28,7 @@ IP address -> nshgeoip -> local MMDB lookup -> GeoIP annotation
 - [NGINX auth_request example](#nginx-auth_request-example)
 - [IPv6 support](#ipv6-support)
 - [Concurrency model](#concurrency-model)
+  - [Load testing](#load-testing)
 - [Signals](#signals)
 - [Security considerations](#security-considerations)
 - [Testing](#testing)
@@ -103,7 +104,7 @@ Produces the `nshgeoip` binary in the project root. `make test` builds and runs 
 make clean
 ```
 
-### Static Alpine build
+### Static build (scratch image)
 
 ```bash
 ./build.sh                    # build the image, extract the binary to ./nshgeoip
@@ -114,14 +115,31 @@ IMAGE_TAG=myregistry/nshgeoip:1.0 ./build.sh   # override the image tag
 
 Builds a fully static (musl, no shared `libmaxminddb`) `nshgeoip` binary using Alpine's own `libmaxminddb-static`
 package, inside a multi-stage `Dockerfile`. `build.sh` runs `docker build`, then copies the resulting binary out of
-the image to disk -- the image itself (`FROM alpine ... AS runtime`, running as a non-root `nshgeoip` user, no
-package repo needed at all since the binary is static) is also usable directly as a container without extracting
-anything. The actual compile/link steps live in [docker/compile_alpine_static.sh](docker/compile_alpine_static.sh)
-(a plain `sh` script, run inside the build stage), not inline in the Dockerfile.
+the image to disk -- the image itself is also usable directly as a container without extracting anything. The build
+stage is Alpine (needs `g++`/`make`/the dev packages); the runtime stage is `FROM scratch` -- no base OS at all, just
+the static binary, running as a non-root numeric UID (`65532:65532`, the same "nonroot" convention the distroless
+images use -- scratch has no `/etc/passwd` to hold a named user). The actual compile/link steps live in
+[docker/compile_alpine_static.sh](docker/compile_alpine_static.sh) (a plain `sh` script, run inside the build stage),
+not inline in the Dockerfile.
 
-A static musl binary has no runtime dependency on `libmaxminddb` (or glibc) being installed at all, which is useful
-for copying `nshgeoip` onto a minimal/distroless target or a system where you'd rather not add package-manager
-dependencies just to run one small daemon.
+A static musl binary has no runtime dependency on `libmaxminddb` (or glibc) being installed at all, which is what
+makes a `scratch` runtime possible in the first place.
+
+Two things a `scratch` image has no room for, worth knowing before running one:
+
+- **No config file by default.** The image ships no `CMD`, so it runs with zero arguments -- config file is optional
+  at its default path (see [Configuration](#configuration)), falling back entirely to `NSHGEOIP_*` environment
+  variables and auto-detected databases. Mount a real config file and pass `--config PATH` yourself if you want one.
+- **No `/run` directory until something creates it.** The default socket path is `/run/nshgeoip/nshgeoip.sock`, and
+  scratch has no filesystem beyond what's `COPY`'d in. Run with a writable `/run`, owned by the same UID as `USER`
+  above, e.g.:
+  ```bash
+  docker run --tmpfs /run:rw,uid=65532,gid=65532 -v /var/lib/GeoIP:/var/lib/GeoIP:ro nshgeoip:static
+  ```
+
+There's also no `curl`/`wget` in the image for a `HEALTHCHECK` to shell out to -- that's exactly what `--health-check`
+(see [Configuration](#configuration)) exists for; the `Dockerfile` already wires it in as
+`HEALTHCHECK CMD ["/usr/local/sbin/nshgeoip", "--health-check"]`.
 
 ## Configuration
 
@@ -566,6 +584,39 @@ Each connection is handled synchronously end-to-end (read request, look up, writ
 persistent/keep-alive connections -- every response is `Connection: close`. This avoids needing to implement pipelining,
 chunked transfer, or partial-body edge cases for a backend that only ever needs to answer one small request at a time.
 
+### Load testing
+
+[examples/load_test.sh](examples/load_test.sh) starts a throwaway `nshgeoip` instance and hits `/lookup` with
+[`ab`](https://httpd.apache.org/docs/2.4/programs/ab.html) (Apache Bench) and/or [`wrk`](https://github.com/wg/wrk),
+whichever is installed. Both tools are TCP-only -- neither can talk to a UNIX domain socket -- so the script enables
+`tcp_port`/`tcp_address` for the duration of the run rather than testing over the socket NGINX actually uses; combined
+with `nshgeoip` never keeping a connection alive (see [Concurrency model](#concurrency-model) above), this measures
+accept+dispatch+lookup overhead under fresh connections each time, not the exact production request path.
+
+```bash
+make                          # build nshgeoip first
+./examples/load_test.sh
+```
+
+```text
+--- ab: 20000 requests, concurrency 50 ---
+Requests per second:    19563.73 [#/sec] (mean)
+Time per request:       1.022 [ms] (mean)
+
+--- wrk: 4 threads, concurrency 50, 10s ---
+Requests/sec:  24959.00
+```
+
+Everything is tunable via environment variables, e.g. a higher-concurrency run against a specific address:
+
+```bash
+LOAD_TEST_IP=1.1.1.1 LOAD_TEST_CONCURRENCY=200 LOAD_TEST_REQUESTS=100000 ./examples/load_test.sh
+```
+
+Needs at least one real or fixture `.mmdb` to start `nshgeoip` at all, same requirement as
+[`tests/integration_test.sh`](#testing) -- auto-detected at a standard location or via
+`TEST_COUNTRY_DB`/`TEST_ASN_DB`/`TEST_CITY_DB`.
+
 ## Signals
 
 | Signal               | Effect                                                         |
@@ -648,6 +699,6 @@ your use case needs more accuracy or update frequency than GeoLite2 offers, MaxM
 same `libmaxminddb` reader, just point `nshgeoip` at the GeoIP2 file instead.
 
 `nshgeoip` links against [`libmaxminddb`](https://github.com/maxmind/libmaxminddb) (Copyright MaxMind, Inc.,
-Apache License 2.0) -- statically in the [static Alpine build](#static-alpine-build)'s release binaries,
+Apache License 2.0) -- statically in the [static build](#static-build-scratch-image)'s release binaries,
 dynamically otherwise. See [NOTICE](NOTICE) for the reproduced copyright notice.
 

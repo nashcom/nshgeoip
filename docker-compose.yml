@@ -1,0 +1,26 @@
+services:
+
+  nshgeoip:
+    build:
+      context: .
+    image: nshgeoip:latest
+    container_name: nshgeoip
+    hostname: nshgeoip
+    restart: always
+
+    environment:
+      NSHGEOIP_TCP_ADDRESS: "${NSHGEOIP_TCP_ADDRESS:-0.0.0.0}"
+      NSHGEOIP_TCP_PORT:    "${NSHGEOIP_TCP_PORT:-8080}"
+
+    ports:
+      - "${NSHGEOIP_TCP_PORT:-8080}:${NSHGEOIP_TCP_PORT:-8080}"
+
+    volumes:
+      - /var/lib/GeoIP:/var/lib/GeoIP:ro
+
+    healthcheck:
+      test: ["CMD", "/nshgeoip", "--health-check"]
+      interval: 60s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

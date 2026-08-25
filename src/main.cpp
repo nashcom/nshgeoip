@@ -1,9 +1,14 @@
 // Copyright (c) 2026 Daniel Nashed / NashCom
 // SPDX-License-Identifier: Apache-2.0
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -68,7 +73,8 @@ void print_help(const char *argv0)
                 "'GET /metrics' (Prometheus text format) -- neither has its own on/off\n"
                 "switch; restrict access with NGINX (or your firewall) if needed.\n"
                 "\n"
-                "Usage: %s [--config PATH] | --check-db PATH [--format table|json|ini] | --version | --help\n"
+                "Usage: %s [--config PATH] | --check-db PATH [--format table|json|ini]\n"
+                "                | --health-check [--socket PATH | --port PORT] | --version | --help\n"
                 "\n"
                 "  --config PATH        Path to config file (default: %s)\n"
                 "  --check-db PATH      Print an .mmdb file's own metadata (type, build date/age,\n"
@@ -77,6 +83,14 @@ void print_help(const char *argv0)
                 "  --format FORMAT      table (default), json, or ini -- only with --check-db;\n"
                 "                       json/ini use libmaxminddb's own field names (database_type,\n"
                 "                       ip_version, node_count, ...) plus build_date/age_days\n"
+                "  --health-check       Query a running instance's /health over its UNIX socket (or\n"
+                "                       TCP with --port) and exit 0 (HTTP 200) or 1 (anything else) --\n"
+                "                       meant for Docker HEALTHCHECK / Kubernetes probes; does not read\n"
+                "                       any config file or environment variable\n"
+                "  --socket PATH        UNIX socket to check -- only with --health-check\n"
+                "                       (default: %s)\n"
+                "  --port PORT          Check via TCP 127.0.0.1:PORT instead of a UNIX socket --\n"
+                "                       only with --health-check\n"
                 "  --version            Print version and exit\n"
                 "  --help               Print this help and exit\n"
                 "\n"
@@ -86,7 +100,7 @@ void print_help(const char *argv0)
                 "container can run on environment variables alone. Precedence:\n"
                 "environment > config file > default.\n"
                 "\n",
-                argv0, kDefaultConfigPath);
+                argv0, kDefaultConfigPath, nshgeoip::Config().socket_path.c_str());
 
     std::printf("%-27s %-35s %-52s %s\n", "CONFIG KEY", "ENVIRONMENT VARIABLE", "DESCRIPTION", "DEFAULT");
     for (const auto &p : kParams)
@@ -109,6 +123,95 @@ void print_help(const char *argv0)
                 "Country database would add.\n");
 }
 
+constexpr int kHealthCheckTimeoutSeconds = 3;
+
+// Connects to a running instance and does a bare "GET /health", checking
+// only for an HTTP 200 status line -- used by --health-check, which exists
+// because the runtime container image is fully static with no curl/wget
+// (see Dockerfile), so nshgeoip has to be its own health-check client. Not
+// a general HTTP client: no header/body parsing beyond the status line,
+// same "just enough" spirit as http.cpp's server-side parsing.
+bool check_health(const std::string &socket_path, int tcp_port, std::string &err)
+{
+    int fd;
+    if (tcp_port != 0)
+    {
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0)
+        {
+            err = std::string("socket() failed: ") + strerror(errno);
+            return false;
+        }
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<uint16_t>(tcp_port));
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0)
+        {
+            err = "connect to 127.0.0.1:" + std::to_string(tcp_port) + " failed: " + strerror(errno);
+            close(fd);
+            return false;
+        }
+    }
+    else
+    {
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0)
+        {
+            err = std::string("socket() failed: ") + strerror(errno);
+            return false;
+        }
+        sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        if (socket_path.size() >= sizeof(addr.sun_path))
+        {
+            err = "socket path too long: " + socket_path;
+            close(fd);
+            return false;
+        }
+        std::strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
+        if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0)
+        {
+            err = "connect to " + socket_path + " failed: " + strerror(errno);
+            close(fd);
+            return false;
+        }
+    }
+
+    timeval tv{kHealthCheckTimeoutSeconds, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    static const char kRequest[] = "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    if (write(fd, kRequest, sizeof(kRequest) - 1) < 0)
+    {
+        err = std::string("write failed: ") + strerror(errno);
+        close(fd);
+        return false;
+    }
+
+    char buf[64];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0)
+    {
+        err = (n < 0) ? (std::string("read failed: ") + strerror(errno)) : "connection closed with no response";
+        return false;
+    }
+    buf[n] = '\0';
+
+    // Status line only ("HTTP/1.1 200 ...") -- Docker/Kubernetes only care
+    // whether this was a 200, same reasoning as /health's own response
+    // format (see server.cpp).
+    if (std::strncmp(buf, "HTTP/1.1 200", 12) != 0)
+    {
+        std::string line(buf);
+        err = "unexpected response: " + line.substr(0, line.find("\r\n"));
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -119,6 +222,10 @@ int main(int argc, char **argv)
     bool check_db_requested = false;
     std::string check_db_path;
     std::string check_db_format = "table";
+
+    bool health_check_requested = false;
+    std::string health_check_socket; // empty = compiled-in default
+    int health_check_port = 0;       // 0 = use health_check_socket instead
 
     for (int i = 1; i < argc; ++i)
     {
@@ -165,6 +272,35 @@ int main(int argc, char **argv)
             config_path_explicit = true;
             continue;
         }
+        if (arg == "--health-check")
+        {
+            health_check_requested = true;
+            continue;
+        }
+        if (arg == "--socket")
+        {
+            if (i + 1 >= argc)
+            {
+                std::fprintf(stderr, "--socket requires a path argument\n");
+                return 2;
+            }
+            health_check_socket = argv[++i];
+            continue;
+        }
+        if (arg == "--port")
+        {
+            if (i + 1 >= argc)
+            {
+                std::fprintf(stderr, "--port requires a value\n");
+                return 2;
+            }
+            if (!nshgeoip::parse_port(argv[++i], health_check_port))
+            {
+                std::fprintf(stderr, "invalid --port value: %s\n", argv[i]);
+                return 2;
+            }
+            continue;
+        }
         std::fprintf(stderr, "unknown argument: %s\n", arg.c_str());
         print_help(argv[0]);
         return 2;
@@ -200,13 +336,37 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (!health_check_requested && (!health_check_socket.empty() || health_check_port != 0))
+    {
+        std::fprintf(stderr, "--socket and --port only apply together with --health-check\n");
+        return 2;
+    }
+
+    if (health_check_requested)
+    {
+        if (!health_check_socket.empty() && health_check_port != 0)
+        {
+            std::fprintf(stderr, "--socket and --port are mutually exclusive\n");
+            return 2;
+        }
+
+        std::string socket_path = health_check_socket.empty() ? nshgeoip::Config().socket_path : health_check_socket;
+        std::string hc_err;
+        if (!check_health(socket_path, health_check_port, hc_err))
+        {
+            std::fprintf(stderr, "status=fail: %s\n", hc_err.c_str());
+            return 1;
+        }
+        std::printf("status=ok\n");
+        return 0;
+    }
+
     // A worker thread's write() to a client that has already closed its
     // end of the socket must not kill the process.
     signal(SIGPIPE, SIG_IGN);
 
     nshgeoip::log_info(std::string("nshgeoip ") + NSHGEOIP_VERSION + " starting");
     nshgeoip::log_info(std::string("libmaxminddb version: ") + MMDB_lib_version());
-    nshgeoip::log_info("uses GeoLite2 data created by MaxMind, available from https://www.maxmind.com");
 
     nshgeoip::Config cfg;
     std::string err;
