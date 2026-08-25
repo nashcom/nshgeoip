@@ -1,0 +1,23 @@
+# Build artifacts (see Makefile: SRCS := $(wildcard src/*.cpp), -MMD -MP)
+*.o
+*.d
+
+# Compiled binaries
+/nshgeoip
+tests/test_nshgeoip
+
+# docker/compile_alpine_static.sh and build.sh's own output land here too,
+# already covered by *.o and /nshgeoip above.
+
+# Stray test/run output
+tests/*.log
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS cruft
+.DS_Store
+Thumbs.db

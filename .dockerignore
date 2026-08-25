@@ -1,0 +1,6 @@
+*.o
+*.d
+nshgeoip
+tests/test_nshgeoip
+tests/*.log
+.git

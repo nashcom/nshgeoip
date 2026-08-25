@@ -1,0 +1,63 @@
+# nshgeoip configuration
+#
+# Simple key=value format. Blank lines and lines starting with '#' are
+# ignored. Unknown keys are ignored (and logged as a warning at startup),
+# so this file stays forward-compatible.
+#
+# Every key below also has an NSHGEOIP_<KEY> environment variable (e.g.
+# NSHGEOIP_TCP_PORT for tcp_port=) that overrides it -- environment takes
+# precedence over this file. This file itself is optional at its default
+# path (/etc/nshgeoip/nshgeoip.conf): if it's missing there, nshgeoip just
+# runs on built-in defaults plus whatever NSHGEOIP_* variables are set,
+# which is the intended way to configure it in a container.
+
+# At least one of country_db / asn_db / city_db must be set. Leave a line
+# commented out (or delete it) to disable that lookup type.
+#
+# country_db is optional if city_db is set: a real GeoLite2-City.mmdb
+# already carries country/continent data, so nshgeoip falls back to reading
+# those fields from city_db when country_db isn't configured. A
+# city_db + asn_db-only setup (no country_db) still gets full
+# country/continent/city/ASN annotation -- e.g. for consumers like
+# CrowdSec, which only need city and ASN.
+country_db=/var/lib/GeoIP/GeoLite2-Country.mmdb
+asn_db=/var/lib/GeoIP/GeoLite2-ASN.mmdb
+city_db=/var/lib/GeoIP/GeoLite2-City.mmdb
+
+# UNIX domain socket path and permissions. nshgeoip removes a stale socket
+# file left over from a previous run before binding a new one.
+socket=/run/nshgeoip/nshgeoip.sock
+socket_mode=0660
+
+# Worker thread pool size. Left unset (the default), this tracks the host's
+# own CPU core count (clamped to 4-20) -- nshgeoip only handles short,
+# local, synchronous lookups, so this does not need to be large, and going
+# well past core count doesn't help. Uncomment to pin an explicit value
+# instead (1-256).
+#threads=8
+
+# Maximum bytes read for a request's headers (defends against a slow or
+# malicious client feeding an unbounded amount of header data).
+max_request_bytes=8192
+
+# Set to true to log rejected/malformed requests at debug detail. Off by
+# default to avoid log noise; successful lookups are never logged.
+#debug_log=false
+
+# Optional TCP/IP listener, off by default (the UNIX socket above is always
+# available regardless of this setting). Set tcp_port to enable it; 0 or
+# unset means disabled. With tcp_address left unset, nshgeoip binds loopback
+# on both IPv4 (127.0.0.1) and IPv6 (::1); set tcp_address to bind that one
+# address only instead.
+#tcp_port=8080
+#tcp_address=127.0.0.1
+
+# GET /health (JSON) and GET /metrics (Prometheus text format) are always
+# available -- no config flag turns them off; restrict access with NGINX
+# (or a firewall) if needed. metrics_file is a separate, optional feature:
+# a path to periodically write the same content /metrics serves, for
+# node_exporter's textfile collector or similar delivery that doesn't
+# involve scraping the HTTP endpoint. Written atomically (temp file +
+# rename()) every metrics_interval_seconds. Empty/unset = disabled.
+#metrics_file=/var/lib/node_exporter/textfile_collector/nshgeoip.prom
+#metrics_interval_seconds=60

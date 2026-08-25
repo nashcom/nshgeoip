@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  release:
+    types: [published, edited]
+
+jobs:
+  release:
+    name: Build & Upload Binaries
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # Required to upload release assets
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Builds the same Dockerfile a developer's ./build.sh would, via the
+      # official Docker actions instead of shelling out to the docker CLI --
+      # this also verifies the Dockerfile itself still builds, not just the
+      # compile script in isolation. load: true keeps the image in the local
+      # daemon (rather than pushing it anywhere) so the next step can pull
+      # the binary back out of it.
+      - name: Build static Alpine image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          tags: nshgeoip:static
+          load: true
+          push: false
+
+      - name: Extract binary from image
+        run: |
+          CID=$(docker create nshgeoip:static)
+          docker cp "$CID:/usr/local/sbin/nshgeoip" ./nshgeoip
+          docker rm "$CID" >/dev/null
+
+      - name: Package release assets
+        run: |
+          VERSION=$(sed -n 's/.*NSHGEOIP_VERSION "\(.*\)".*/\1/p' src/version.h)
+          BIN="nshgeoip-$VERSION"
+          cp nshgeoip "$BIN"
+          sha256sum "$BIN" > "$BIN.sha256"
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            nshgeoip-*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
