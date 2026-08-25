@@ -14,7 +14,7 @@ IMAGE_TAG="${IMAGE_TAG:-nshgeoip:static}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 OUT="${1:-$SCRIPT_DIR/nshgeoip}"
 
-docker build -t "$IMAGE_TAG" "$SCRIPT_DIR"
+docker build --progress=plain -t "$IMAGE_TAG" "$SCRIPT_DIR"
 echo "built image: $IMAGE_TAG"
 
 CID="$(docker create "$IMAGE_TAG")"

@@ -17,8 +17,15 @@ OUT="${1:-$PROJECT_ROOT/nshgeoip}"
 cd "$PROJECT_ROOT"
 
 echo "==> compiling nshgeoip object files"
-make src/config.o src/geoip.o src/http.o src/ip_addr.o src/main.o src/server.o src/text_util.o src/thread_pool.o \
-    CXXFLAGS="-std=c++17 -Wall -Wextra -O2 -pthread"
+# Derived from src/*.cpp (same source list the Makefile's own wildcard uses)
+# rather than hardcoded, so a new source file can't silently go missing from
+# the static build the way src/metrics.cpp once did here.
+OBJS=""
+for f in src/*.cpp; do
+    OBJS="$OBJS ${f%.cpp}.o"
+done
+
+make $OBJS CXXFLAGS="-std=c++17 -Wall -Wextra -O2 -pthread"
 
 echo "==> compiling fortify shim"
 # On Alpine, g++/libstdc++ still emits calls to glibc-style
@@ -35,7 +42,7 @@ g++ -std=c++17 -Wall -Wextra -O2 -pthread -c "$SCRIPT_DIR/fortify_shim.cpp" -o "
 
 echo "==> linking static binary -> $OUT"
 g++ -static -pthread -o "$OUT" \
-    src/config.o src/geoip.o src/http.o src/ip_addr.o src/main.o src/server.o src/text_util.o src/thread_pool.o \
+    $OBJS \
     "$SCRIPT_DIR/fortify_shim.o" \
     -lmaxminddb -lssp_nonshared
 
