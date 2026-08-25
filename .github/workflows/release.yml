@@ -17,6 +17,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # QEMU emulates arm64 on this (amd64) runner -- slower than a native
+      # arm64 runner would be, but works the same everywhere without needing
+      # a second runner type. Only needed for the release build; ci.yml
+      # stays amd64-only for speed.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -25,43 +32,55 @@ jobs:
           VERSION=$(sed -n 's/.*NSHGEOIP_VERSION "\(.*\)".*/\1/p' src/version.h)
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      # Builds the same Dockerfile a developer's ./build.sh would, via the
-      # official Docker actions instead of shelling out to the docker CLI --
-      # this also verifies the Dockerfile itself still builds, not just the
-      # compile script in isolation. load: true keeps the image in the local
-      # daemon (rather than pushing it anywhere) so the next step can pull
-      # the binary back out of it. Cached via actions/cache (type=gha) so
-      # the GHCR push step below doesn't have to recompile from scratch --
-      # load and push can't happen in the same build-push-action step (a
-      # known buildx limitation: docker/buildx#59), so this has to be two
-      # separate builds either way.
-      - name: Build static image (local)
+      # One local (load: true) build per platform, each cached under its own
+      # scope so they don't clobber each other -- these are what the binary
+      # extraction below pulls from. load can only hold a single-platform
+      # image at a time (a multi-platform manifest list can't be loaded into
+      # the local daemon), which is also why this can't just be one
+      # platforms: linux/amd64,linux/arm64 build.
+      - name: Build amd64 image (local)
         uses: docker/build-push-action@v7
         with:
           context: .
-          tags: nshgeoip:local
+          platforms: linux/amd64
+          tags: nshgeoip:local-amd64
           load: true
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
 
-      - name: Extract binary from image
+      - name: Build arm64 image (local)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          tags: nshgeoip:local-arm64
+          load: true
+          push: false
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
+
+      - name: Extract binaries from images
         run: |
-          CID=$(docker create nshgeoip:local)
-          docker cp "$CID:/nshgeoip" ./nshgeoip
-          docker rm "$CID" >/dev/null
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CID=$(docker create "nshgeoip:local-$arch")
+            docker cp "$CID:/nshgeoip" "dist/nshgeoip-$VERSION-$arch"
+            docker rm "$CID" >/dev/null
+          done
 
       - name: Package release assets
         run: |
-          BIN="nshgeoip-$VERSION"
-          cp nshgeoip "$BIN"
-          sha256sum "$BIN" > "$BIN.sha256"
+          cd dist
+          for f in nshgeoip-*; do
+            sha256sum "$f" > "$f.sha256"
+          done
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            nshgeoip-*
+            dist/nshgeoip-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -72,13 +91,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image to GHCR
+      # A genuine multi-platform build this time (push: true supports it,
+      # unlike load above) -- produces one multi-arch manifest list per tag,
+      # so "docker pull ghcr.io/nashcom/nshgeoip:latest" picks the right
+      # architecture automatically on either platform. Reuses both single-
+      # arch caches from above rather than recompiling from scratch.
+      - name: Push multi-arch image to GHCR
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/nashcom/nshgeoip:${{ env.VERSION }}
             ghcr.io/nashcom/nshgeoip:latest
           push: true
-          cache-from: type=gha
+          cache-from: |
+            type=gha,scope=amd64
+            type=gha,scope=arm64
           cache-to: type=gha,mode=max
