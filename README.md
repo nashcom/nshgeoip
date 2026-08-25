@@ -117,29 +117,31 @@ Builds a fully static (musl, no shared `libmaxminddb`) `nshgeoip` binary using A
 package, inside a multi-stage `Dockerfile`. `build.sh` runs `docker build`, then copies the resulting binary out of
 the image to disk -- the image itself is also usable directly as a container without extracting anything. The build
 stage is Alpine (needs `g++`/`make`/the dev packages); the runtime stage is `FROM scratch` -- no base OS at all, just
-the static binary, running as a non-root numeric UID (`65532:65532`, the same "nonroot" convention the distroless
-images use -- scratch has no `/etc/passwd` to hold a named user). The actual compile/link steps live in
+the static binary at `/nshgeoip`, running as a non-root numeric UID (`1000:1000` -- scratch has no `/etc/passwd` to
+hold a named user). The actual compile/link steps live in
 [docker/compile_alpine_static.sh](docker/compile_alpine_static.sh) (a plain `sh` script, run inside the build stage),
 not inline in the Dockerfile.
 
 A static musl binary has no runtime dependency on `libmaxminddb` (or glibc) being installed at all, which is what
 makes a `scratch` runtime possible in the first place.
 
-Two things a `scratch` image has no room for, worth knowing before running one:
+A bare scratch image has no `/tmp` or `/run` at all until something creates them, and no shell in the runtime stage
+to run `mkdir` -- so both are pre-created empty in the Alpine build stage and `COPY`'d in with explicit permissions
+(`--chmod`/`--chown` set at copy time, not relied on from the source directory, since plain `COPY` doesn't reliably
+preserve a source directory's own mode): `/tmp` world-writable (`1777`), `/run` owned by the same `1000:1000` the
+container runs as. That means the default socket path (`/run/nshgeoip/nshgeoip.sock`) just works with no volume or
+tmpfs required at all -- `docker run -v /var/lib/GeoIP:/var/lib/GeoIP:ro nshgeoip:latest` is enough on its own.
 
-- **No config file by default.** The image ships no `CMD`, so it runs with zero arguments -- config file is optional
-  at its default path (see [Configuration](#configuration)), falling back entirely to `NSHGEOIP_*` environment
-  variables and auto-detected databases. Mount a real config file and pass `--config PATH` yourself if you want one.
-- **No `/run` directory until something creates it.** The default socket path is `/run/nshgeoip/nshgeoip.sock`, and
-  scratch has no filesystem beyond what's `COPY`'d in. Run with a writable `/run`, owned by the same UID as `USER`
-  above, e.g.:
-  ```bash
-  docker run --tmpfs /run:rw,uid=65532,gid=65532 -v /var/lib/GeoIP:/var/lib/GeoIP:ro nshgeoip:static
-  ```
+The image ships no `CMD`, so it runs with zero arguments -- config file is optional at its default path (see
+[Configuration](#configuration)), falling back entirely to `NSHGEOIP_*` environment variables and auto-detected
+databases. Mount a real config file and pass `--config PATH` yourself if you want one instead.
 
 There's also no `curl`/`wget` in the image for a `HEALTHCHECK` to shell out to -- that's exactly what `--health-check`
 (see [Configuration](#configuration)) exists for; the `Dockerfile` already wires it in as
-`HEALTHCHECK CMD ["/usr/local/sbin/nshgeoip", "--health-check"]`.
+`HEALTHCHECK CMD ["/nshgeoip", "--health-check"]`.
+
+See [docker-compose.yml](docker-compose.yml) for a ready-to-run example (GeoIP volume, optional TCP via
+`NSHGEOIP_TCP_PORT`, healthcheck).
 
 ## Configuration
 
@@ -434,7 +436,7 @@ $ curl --unix-socket /run/nshgeoip/nshgeoip.sock 'http://localhost/health'
 status=ok
 
 $ curl -H 'Accept: application/json' --unix-socket /run/nshgeoip/nshgeoip.sock 'http://localhost/health'
-{"status":"ok","version":"0.9.0","libmaxminddb_version":"1.9.1","uptime_seconds":12345,"databases":{
+{"status":"ok","version":"0.9.1","libmaxminddb_version":"1.9.1","uptime_seconds":12345,"databases":{
   "country":{"open":false},
   "asn":{"open":true,"database_type":"GeoLite2-ASN","build_epoch":1787559317,
           "build_date":"2026-08-24T08:15:17Z","age_days":1.1,"age_ms":97314000,"age_ns":97314000000000},
@@ -452,7 +454,7 @@ directly instead of cross-referencing logs.
 $ curl --unix-socket /run/nshgeoip/nshgeoip.sock 'http://localhost/metrics'
 # HELP nshgeoip_build_info nshgeoip build information.
 # TYPE nshgeoip_build_info gauge
-nshgeoip_build_info{version="0.9.0",libmaxminddb_version="1.9.1"} 1
+nshgeoip_build_info{version="0.9.1",libmaxminddb_version="1.9.1"} 1
 # HELP nshgeoip_db_age_seconds Seconds since the database was built.
 # TYPE nshgeoip_db_age_seconds gauge
 nshgeoip_db_age_seconds{db="asn"} 97314
