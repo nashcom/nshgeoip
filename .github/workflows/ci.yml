@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmaxminddb-dev
+
+      - name: Build
+        run: make
+
+      - name: Unit tests
+        run: make test
+
+      # MaxMind's own small, freely-redistributable synthetic test fixtures
+      # (used by libmaxminddb's own test suite too) -- no license key needed,
+      # so integration_test.sh can run its full content-specific assertions
+      # here, not just the structural subset that runs without any .mmdb.
+      - name: Fetch MaxMind test fixture databases
+        run: |
+          mkdir -p /tmp/mmdb-test-data
+          for f in GeoLite2-Country-Test.mmdb GeoLite2-ASN-Test.mmdb GeoLite2-City-Test.mmdb; do
+            curl -fsSL -o "/tmp/mmdb-test-data/$f" \
+              "https://raw.githubusercontent.com/maxmind/MaxMind-DB/main/test-data/$f"
+          done
+
+      - name: Integration tests
+        env:
+          TEST_COUNTRY_DB: /tmp/mmdb-test-data/GeoLite2-Country-Test.mmdb
+          TEST_ASN_DB: /tmp/mmdb-test-data/GeoLite2-ASN-Test.mmdb
+          TEST_CITY_DB: /tmp/mmdb-test-data/GeoLite2-City-Test.mmdb
+        run: bash tests/integration_test.sh
+
+      - name: nshgeoipctl.sh tests
+        run: bash tests/test_nshgeoipctl.sh
