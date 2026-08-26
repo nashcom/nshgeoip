@@ -436,7 +436,7 @@ $ curl --unix-socket /run/nshgeoip/nshgeoip.sock 'http://localhost/health'
 status=ok
 
 $ curl -H 'Accept: application/json' --unix-socket /run/nshgeoip/nshgeoip.sock 'http://localhost/health'
-{"status":"ok","version":"0.9.1","libmaxminddb_version":"1.9.1","uptime_seconds":12345,"databases":{
+{"status":"ok","version":"0.9.2","libmaxminddb_version":"1.9.1","uptime_seconds":12345,"databases":{
   "country":{"open":false},
   "asn":{"open":true,"database_type":"GeoLite2-ASN","build_epoch":1787559317,
           "build_date":"2026-08-24T08:15:17Z","age_days":1.1,"age_ms":97314000,"age_ns":97314000000000},
@@ -454,7 +454,7 @@ directly instead of cross-referencing logs.
 $ curl --unix-socket /run/nshgeoip/nshgeoip.sock 'http://localhost/metrics'
 # HELP nshgeoip_build_info nshgeoip build information.
 # TYPE nshgeoip_build_info gauge
-nshgeoip_build_info{version="0.9.1",libmaxminddb_version="1.9.1"} 1
+nshgeoip_build_info{version="0.9.2",libmaxminddb_version="1.9.1"} 1
 # HELP nshgeoip_db_age_seconds Seconds since the database was built.
 # TYPE nshgeoip_db_age_seconds gauge
 nshgeoip_db_age_seconds{db="asn"} 97314
