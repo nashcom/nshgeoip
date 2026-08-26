@@ -1,0 +1,23 @@
+services:
+
+  geoip-sync:
+    image: alpine:latest
+    container_name: geoip-sync
+    hostname: geoip-sync
+    restart: always
+    network_mode: host
+
+    environment:
+      GEOIP_SYNC_SOURCE_URL: "${GEOIP_SYNC_SOURCE_URL:?GEOIP_SYNC_SOURCE_URL is required}"
+      GEOIP_SYNC_EDITION_IDS: "${GEOIP_SYNC_EDITION_IDS:-GeoLite2-ASN GeoLite2-City GeoLite2-Country}"
+      GEOIP_SYNC_INTERVAL: "${GEOIP_SYNC_INTERVAL:-300}"
+      GEOIP_SYNC_DB_DIR: /var/lib/GeoIP
+
+    entrypoint: ["/bin/sh", "/usr/local/bin/geoip-sync.sh"]
+
+    volumes:
+      - ./geoip-sync.sh:/usr/local/bin/geoip-sync.sh:ro
+      - ./data:/var/lib/GeoIP
+
+    read_only: true
+

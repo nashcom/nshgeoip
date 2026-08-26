@@ -1,0 +1,45 @@
+services:
+
+  geoip-update:
+    image: ghcr.io/maxmind/geoipupdate:latest
+    container_name: geoip-update
+    hostname: geoip-update
+    restart: always 
+
+    environment:
+      GEOIPUPDATE_VERBOSE: "1"
+      GEOIPUPDATE_DEBUG: "${GEOIPUPDATE_DEBUG:-0}"
+  
+      GEOIPUPDATE_EDITION_IDS: >-
+        GeoLite2-ASN
+        GeoLite2-City
+        GeoLite2-Country
+
+      # Run immediately, then check every 72 hours
+      GEOIPUPDATE_FREQUENCY: "72"
+
+      # Preserve MaxMind's database timestamps
+      GEOIPUPDATE_PRESERVE_FILE_TIMES: "1"
+
+      GEOIPUPDATE_DB_DIR: /usr/share/GeoIP
+
+    entrypoint: ["/bin/sh", "/usr/local/bin/custom-entrypoint.sh"]
+
+    volumes:
+      - ./secrets:/run/secrets:ro
+      - ./entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
+      - /var/lib/GeoIP:/usr/share/GeoIP
+
+  geoip-mirror:
+    image: nginx:alpine
+    container_name: geoip-mirror
+    hostname: geoip-mirror
+    restart: always 
+
+    ports:
+      - "${GEOIP_MIRROR_ADDRESS:-127.0.0.1}:${GEOIP_MIRROR_PORT:-8081}:80"
+
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - /var/lib/GeoIP:/usr/share/nginx/html:ro
+
