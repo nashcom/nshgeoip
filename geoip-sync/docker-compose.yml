@@ -5,7 +5,6 @@ services:
     container_name: geoip-sync
     hostname: geoip-sync
     restart: always
-    network_mode: host
 
     environment:
       GEOIP_SYNC_SOURCE_URL: "${GEOIP_SYNC_SOURCE_URL:?GEOIP_SYNC_SOURCE_URL is required}"
@@ -17,7 +16,10 @@ services:
 
     volumes:
       - ./geoip-sync.sh:/usr/local/bin/geoip-sync.sh:ro
-      - ./data:/var/lib/GeoIP
+      - /var/lib/GeoIP:/var/lib/GeoIP
 
     read_only: true
+
+    security_opt:
+      - no-new-privileges:true
 

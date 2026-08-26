@@ -49,11 +49,10 @@ GeoLite2-Country.mmdb.metadata.json
 services:
 
   geoip-sync:
-    image: alpine:3.22
+    image: alpine:latest
     container_name: geoip-sync
     hostname: geoip-sync
-    restart: unless-stopped
-    network_mode: host
+    restart: always
 
     environment:
       GEOIP_SYNC_SOURCE_URL: "${GEOIP_SYNC_SOURCE_URL:?GEOIP_SYNC_SOURCE_URL is required}"
@@ -73,7 +72,10 @@ services:
       - no-new-privileges:true
 ```
 
-Host networking is useful when the mirror is available through a service bound to the host's loopback interface. It can be removed when the mirror is reachable normally through DNS or an IP address.
+The default (regular bridge networking) is right for the normal case: `geoip-sync` running on a different host from
+`geoip-update`/`geoip-mirror`, reaching it over the network via `GEOIP_SYNC_SOURCE_URL`'s DNS name or IP address. Add
+`network_mode: host` only if `geoip-sync` runs on the *same* host as a mirror bound to `127.0.0.1` (`geoip-update`'s
+own default) -- a bridge-networked container can't reach the host's loopback interface without it.
 
 ## Configuration
 

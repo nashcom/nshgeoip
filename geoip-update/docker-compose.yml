@@ -4,7 +4,7 @@ services:
     image: ghcr.io/maxmind/geoipupdate:latest
     container_name: geoip-update
     hostname: geoip-update
-    restart: always 
+    restart: always
 
     environment:
       GEOIPUPDATE_VERBOSE: "1"
@@ -34,7 +34,7 @@ services:
     image: nginx:alpine
     container_name: geoip-mirror
     hostname: geoip-mirror
-    restart: always 
+    restart: always
 
     ports:
       - "${GEOIP_MIRROR_ADDRESS:-127.0.0.1}:${GEOIP_MIRROR_PORT:-8081}:80"

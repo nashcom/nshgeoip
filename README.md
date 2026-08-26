@@ -223,6 +223,14 @@ Download `GeoLite2-Country.mmdb`, `GeoLite2-ASN.mmdb`, and (optionally) `GeoLite
 `/var/lib/GeoIP/`. The `nshgeoip` process user needs read access to those files, nothing more -- `nshgeoip` never writes to
 them. [nshgeoipctl.sh download-db](#management-script) automates this download.
 
+Running more than one host that needs these databases? [geoip-update/](geoip-update/) and [geoip-sync/](geoip-sync/) are
+two small standalone Compose stacks for that: `geoip-update` is a single host with real MaxMind credentials that
+downloads the databases (via the official `geoipupdate` image) and serves them over an internal NGINX mirror with
+MD5/SHA-256/metadata sidecars; `geoip-sync` runs on every *other* host instead, syncing from that mirror on an
+interval with full checksum verification and no MaxMind account needed at all. Both publish to `/var/lib/GeoIP` by
+default, so `nshgeoip` picks the result up automatically via the auto-detection below -- no explicit `country_db`/
+`asn_db`/`city_db` configuration needed on the hosts running `geoip-sync`.
+
 Any of the three left unset falls back, at startup, to `GeoLite2-{Country,ASN,City}.mmdb` under the first of
 `/var/lib/GeoIP` (geoipupdate's own default location) or `/var/lib/crowdsec/data` (CrowdSec's bundled copy -- ASN/City
 only, no Country) where that file actually exists -- see `nshgeoip --help` for the exact search order. Explicit
